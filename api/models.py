@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 
@@ -27,7 +27,7 @@ class IngestResponse(BaseModel):
 class Enrichment(BaseModel):
     exploitability: str
     fix: str
-    urgency: str  # "now" | "today" | "this-week"
+    urgency: Literal["now", "today", "this-week"]
 
 
 class ScoredFinding(BaseModel):

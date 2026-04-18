@@ -74,7 +74,10 @@ def analyze(
     findings = []
     for i, row in enumerate(rows[:5]):
         raw_enrichment = enrichment_map.get(row["id"])
-        enrichment = Enrichment(**raw_enrichment) if raw_enrichment else None
+        try:
+            enrichment = Enrichment(**raw_enrichment) if raw_enrichment else None
+        except Exception:
+            enrichment = None
         findings.append(
             ScoredFinding(
                 rank=i + 1,

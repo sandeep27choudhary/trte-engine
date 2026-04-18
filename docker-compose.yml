@@ -37,6 +37,8 @@ services:
     build: ./worker
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - ./api/db.py:/app/db.py
     depends_on:
       postgres:
         condition: service_healthy

@@ -59,6 +59,10 @@ class LLMProvider:
         if uncached:
             try:
                 enrichments = self._call_llm(uncached)
+                if len(enrichments) != len(uncached):
+                    raise ValueError(
+                        f"LLM returned {len(enrichments)} enrichments for {len(uncached)} findings"
+                    )
                 for f, enrichment in zip(uncached, enrichments):
                     self._redis.setex(_cache_key(f), REDIS_LLM_TTL, json.dumps(enrichment))
                     results[f["id"]] = enrichment
