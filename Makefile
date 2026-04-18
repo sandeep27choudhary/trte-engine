@@ -1,3 +1,5 @@
+.PHONY: test up down
+
 test:
 	PYTHONPATH=worker pytest tests/ -v
 
