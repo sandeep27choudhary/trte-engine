@@ -20,7 +20,7 @@ st.title("🛡 TRTE — Top Risk Triage Engine")
 try:
     health_resp = requests.get(f"{API_URL}/health", timeout=TIMEOUT)
     api_ok = health_resp.status_code == 200
-except Exception:
+except requests.exceptions.RequestException:
     api_ok = False
 
 if api_ok:
@@ -35,7 +35,7 @@ else:
 try:
     triage_resp = requests.get(f"{API_URL}/triage", params={"days": 7}, timeout=TIMEOUT)
     triage_data = triage_resp.json().get("findings", []) if triage_resp.status_code == 200 else []
-except Exception:
+except requests.exceptions.RequestException:
     triage_data = []
 
 col1, col2, col3 = st.columns(3)
@@ -57,12 +57,19 @@ st.subheader("📥 Ingest Findings")
 scanner = st.text_input("Scanner name", value="trivy")
 
 _sample_path = os.path.join(os.path.dirname(__file__), "sample_findings.json")
-with open(_sample_path) as _f:
-    _sample = json.load(_f)
-_sample_json = json.dumps(_sample["findings"], indent=2)
+try:
+    with open(_sample_path) as _f:
+        _sample = json.load(_f)
+    _sample_json = json.dumps(_sample["findings"], indent=2)
+    _sample_ok = True
+except (FileNotFoundError, json.JSONDecodeError):
+    _sample_json = ""
+    _sample_ok = False
 
-if st.button("📋 Load Sample"):
+if _sample_ok and st.button("📋 Load Sample"):
     st.session_state["findings_json"] = _sample_json
+elif not _sample_ok:
+    st.warning("sample_findings.json not found — Load Sample unavailable.")
 
 findings_input = st.text_area(
     "Findings JSON (array)",
