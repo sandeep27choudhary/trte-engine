@@ -1,0 +1,36 @@
+{
+  "scanner": "trivy",
+  "findings": [
+    {
+      "id": "vuln-001",
+      "service": "payment-api",
+      "severity": "critical",
+      "type": "SQL Injection",
+      "environment": "production",
+      "internet_exposed": true,
+      "sensitive_data": true,
+      "cve": "CVE-2024-1234",
+      "description": "Unsanitized input in login endpoint"
+    },
+    {
+      "id": "vuln-002",
+      "service": "auth-service",
+      "severity": "high",
+      "type": "XSS",
+      "environment": "production",
+      "internet_exposed": false,
+      "sensitive_data": true,
+      "description": "Reflected XSS in search param"
+    },
+    {
+      "id": "vuln-003",
+      "service": "reporting-api",
+      "severity": "medium",
+      "type": "SSRF",
+      "environment": "staging",
+      "internet_exposed": true,
+      "sensitive_data": false,
+      "description": "Unvalidated URL in webhook handler"
+    }
+  ]
+}
