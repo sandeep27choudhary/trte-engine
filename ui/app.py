@@ -43,7 +43,7 @@ with col1:
     top_score = max((f["base_score"] for f in triage_data), default=None)
     st.metric("Top Score", top_score if top_score is not None else "—", help="Highest base score this week")
 with col2:
-    st.metric("Findings", len(triage_data), help="Findings in current triage window")
+    st.metric("Findings", len(triage_data) if triage_data else "—", help="Findings in current triage window")
 with col3:
     critical_count = sum(1 for f in triage_data if f.get("severity") == "critical")
     st.metric("Critical", critical_count if triage_data else "—", help="Critical severity findings in triage window")
