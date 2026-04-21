@@ -12,29 +12,65 @@ REDIS_LLM_TTL = int(os.getenv("REDIS_LLM_TTL_SECONDS", "86400"))
 CACHE_PREFIX = "trte:llm:"
 
 SYSTEM_PROMPT = (
-    "You are a security triage assistant. Analyze the vulnerability findings below.\n"
-    "Return a JSON array where each element corresponds to one finding (same order).\n"
-    "Each element must have exactly these fields:\n"
+    "You are a security reasoning engine. You do NOT change base scores. "
+    "You only analyze exploitability, detect simple correlations, and produce concise actionable insights.\n\n"
+    "Rules:\n"
+    "- Be deterministic and concise\n"
+    "- No hallucinations\n"
+    "- Do not invent missing data\n"
+    "- Use only given inputs\n"
+    "- Max 2-3 lines per explanation\n\n"
+    "Tasks:\n"
+    "1. For each finding:\n"
+    "   - Determine if it is realistically exploitable\n"
+    "   - Provide a short reason (max 2 lines)\n"
+    "   - Provide a concrete fix\n"
+    "   - Assign urgency: now | today | this-week\n"
+    "   - Suggest adjusted_priority: high | medium | low based on real-world risk\n\n"
+    "2. Correlation (IMPORTANT):\n"
+    "   - Identify simple attack paths across findings\n"
+    "   - Only use obvious combinations like:\n"
+    "     - internet_exposed + weak auth\n"
+    "     - sensitive_data + public access\n"
+    "     - production + critical vuln\n"
+    "   - If correlation exists, include a combined_risk note for the relevant finding\n\n"
+    "Return a JSON object with a 'results' array. Each element must have exactly these fields:\n"
     '- "id": the finding id (string)\n'
-    '- "exploitability": 1-2 sentences on how this could be exploited (string)\n'
-    '- "fix": 1-2 sentences on how to fix it (string)\n'
-    '- "urgency": one of "now", "today", or "this-week" (string)\n'
+    '- "exploitability": High | Medium | Low (string)\n'
+    '- "reason": max 2 lines on why it is exploitable (string)\n'
+    '- "fix": concrete remediation (string)\n'
+    '- "urgency": one of "now", "today", "this-week" (string)\n'
+    '- "adjusted_priority": one of "high", "medium", "low" (string)\n'
+    '- "combined_risk": correlation note if applicable, else null\n\n'
     "Return ONLY valid JSON. No markdown, no explanation."
 )
 
 
 def _cache_key(finding: dict) -> str:
-    canonical = json.dumps(finding, sort_keys=True)
+    canonical = json.dumps(finding, sort_keys=True, default=str)
     return CACHE_PREFIX + hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _compress(f: dict) -> str:
+def _format_finding(f: dict) -> str:
     cve = f.get("cve") or "no-cve"
     desc = (f.get("description") or "")[:100]
+    ctx = f.get("context") or {}
+    context_str = ""
+    if ctx:
+        parts = []
+        if ctx.get("criticality"):
+            parts.append(f"criticality={ctx['criticality']}")
+        if ctx.get("public_facing") is not None:
+            parts.append(f"public_facing={ctx['public_facing']}")
+        if ctx.get("owner"):
+            parts.append(f"owner={ctx['owner']}")
+        if parts:
+            context_str = " | " + " | ".join(parts)
     return (
         f"{f['id']} | {f['service']} | {f['severity']} | {f['type']} | "
         f"{f['environment']} | exposed={f.get('internet_exposed', False)} | "
-        f"sensitive={f.get('sensitive_data', False)} | {cve} | \"{desc}\""
+        f"sensitive={f.get('sensitive_data', False)} | score={f.get('base_score', 0)} | "
+        f"{cve} | \"{desc}\"{context_str}"
     )
 
 
@@ -59,13 +95,14 @@ class LLMProvider:
         if uncached:
             try:
                 enrichments = self._call_llm(uncached)
-                if len(enrichments) != len(uncached):
-                    raise ValueError(
-                        f"LLM returned {len(enrichments)} enrichments for {len(uncached)} findings"
-                    )
-                for f, enrichment in zip(uncached, enrichments):
-                    self._redis.setex(_cache_key(f), REDIS_LLM_TTL, json.dumps(enrichment))
-                    results[f["id"]] = enrichment
+                enrichment_by_id = {e["id"]: e for e in enrichments}
+                for f in uncached:
+                    enrichment = enrichment_by_id.get(f["id"])
+                    if enrichment:
+                        self._redis.setex(_cache_key(f), REDIS_LLM_TTL, json.dumps(enrichment))
+                        results[f["id"]] = enrichment
+                    else:
+                        results[f["id"]] = None
             except Exception as e:
                 print(f"LLM call failed: {e}")
                 for f in uncached:
@@ -81,7 +118,7 @@ class OpenAIProvider(LLMProvider):
         self._model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     def _call_llm(self, findings: list[dict]) -> list[dict]:
-        lines = "\n".join(_compress(f) for f in findings)
+        lines = "\n".join(_format_finding(f) for f in findings)
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -90,7 +127,7 @@ class OpenAIProvider(LLMProvider):
             ],
             temperature=0.2,
         )
-        return json.loads(resp.choices[0].message.content)
+        return json.loads(resp.choices[0].message.content)["results"]
 
 
 class AnthropicProvider(LLMProvider):
@@ -100,14 +137,14 @@ class AnthropicProvider(LLMProvider):
         self._model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 
     def _call_llm(self, findings: list[dict]) -> list[dict]:
-        lines = "\n".join(_compress(f) for f in findings)
+        lines = "\n".join(_format_finding(f) for f in findings)
         resp = self._client.messages.create(
             model=self._model,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": lines}],
         )
-        return json.loads(resp.content[0].text)
+        return json.loads(resp.content[0].text)["results"]
 
 
 class OpenRouterProvider(LLMProvider):
@@ -120,7 +157,7 @@ class OpenRouterProvider(LLMProvider):
         self._model = os.environ["OPENROUTER_MODEL"]
 
     def _call_llm(self, findings: list[dict]) -> list[dict]:
-        lines = "\n".join(_compress(f) for f in findings)
+        lines = "\n".join(_format_finding(f) for f in findings)
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -129,7 +166,7 @@ class OpenRouterProvider(LLMProvider):
             ],
             temperature=0.2,
         )
-        return json.loads(resp.choices[0].message.content)
+        return json.loads(resp.choices[0].message.content)["results"]
 
 
 _PROVIDERS = {

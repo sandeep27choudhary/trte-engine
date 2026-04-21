@@ -107,7 +107,8 @@ def get_top_findings(
                 """
                 SELECT f.id, f.service, f.severity, f.type, f.environment,
                        f.internet_exposed, f.sensitive_data, f.cve,
-                       f.description, f.base_score, f.raw
+                       f.description, f.base_score, f.raw,
+                       f.created_at as detected_at
                 FROM findings f
                 JOIN scan_runs sr ON f.scan_run_id = sr.id
                 WHERE sr.id IN (
@@ -126,7 +127,8 @@ def get_top_findings(
                 """
                 SELECT f.id, f.service, f.severity, f.type, f.environment,
                        f.internet_exposed, f.sensitive_data, f.cve,
-                       f.description, f.base_score, f.raw
+                       f.description, f.base_score, f.raw,
+                       f.created_at as detected_at
                 FROM findings f
                 JOIN scan_runs sr ON f.scan_run_id = sr.id
                 WHERE sr.created_at >= %s
