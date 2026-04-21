@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRTE — Top Risk Triage Engine</title>
+  <meta name="description" content="Turn scanner noise into an ordered, LLM-enriched action list. Open-source security triage for engineering teams." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-inner">
+    <span class="nav-logo">TRTE<span class="accent">.</span></span>
+    <div class="nav-links">
+      <a href="#how-it-works">How it works</a>
+      <a href="#scoring">Scoring</a>
+      <a href="#integrate">Integrate</a>
+      <a href="https://github.com/sandeep27choudhary/trte-engine" target="_blank" rel="noopener" class="btn-ghost">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-inner">
+    <div class="badge">Open Source · MIT License</div>
+    <h1>Stop triaging.<br/>Start <span class="accent">fixing</span>.</h1>
+    <p class="hero-sub">
+      TRTE ingests findings from any scanner, scores them with deterministic rules,
+      correlates related vulnerabilities, and delivers a ranked
+      <strong>"fix this first"</strong> list — enriched by LLM reasoning.
+    </p>
+    <div class="hero-cta">
+      <a href="https://github.com/sandeep27choudhary/trte-engine" class="btn-primary" target="_blank" rel="noopener">View on GitHub</a>
+      <a href="#integrate" class="btn-secondary">Integration guide ↓</a>
+    </div>
+    <div class="hero-terminal">
+      <div class="terminal-bar">
+        <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+        <span class="terminal-title">terminal</span>
+      </div>
+      <pre class="terminal-body"><span class="t-dim">$</span> docker compose up -d
+<span class="t-green">✓</span> postgres  started
+<span class="t-green">✓</span> redis     started
+<span class="t-green">✓</span> api       started  <span class="t-dim">:8000</span>
+<span class="t-green">✓</span> worker    started
+<span class="t-green">✓</span> ui        started  <span class="t-dim">:8501</span>
+
+<span class="t-dim">$</span> curl -X POST localhost:8000/triage/analyze
+
+<span class="t-green">#1</span>  payment-api       score <span class="t-red">138</span>  urgency <span class="t-red">now</span>
+<span class="t-green">#2</span>  auth-service      score <span class="t-orange">110</span>  urgency <span class="t-orange">today</span>
+<span class="t-green">#3</span>  order-service     score <span class="t-yellow">82</span>   urgency <span class="t-yellow">this-week</span>
+<span class="t-green">#4</span>  data-pipeline     score <span class="t-yellow">74</span>   urgency <span class="t-yellow">this-week</span>
+<span class="t-green">#5</span>  internal-admin    score <span class="t-dim">32</span>   urgency <span class="t-dim">backlog</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- PROBLEM -->
+<section class="section section-problem">
+  <div class="container">
+    <h2 class="section-title">The scanner noise problem</h2>
+    <p class="section-sub">A typical mid-size org runs 5–15 scanners. Each produces hundreds of findings per scan. A critical RCE in a public-facing payment service sits next to a low-severity typo in an internal tool — both labeled <em>"High."</em></p>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-num">5–15</div>
+        <div class="stat-label">scanners per org</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">1000s</div>
+        <div class="stat-label">findings per sprint</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">5</div>
+        <div class="stat-label">findings that actually matter <em>right now</em></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="section" id="how-it-works">
+  <div class="container">
+    <h2 class="section-title">How it works</h2>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="flow-icon">⬇</div>
+        <h3>Ingest</h3>
+        <p>POST findings from any scanner — Snyk, Trivy, Grype, Semgrep, Checkov, or custom tools. Two endpoints: structured schema and flexible webhook.</p>
+        <code>POST /webhook/findings</code>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-icon">⚡</div>
+        <h3>Score</h3>
+        <p>A deterministic rule engine assigns a score (0–140) using environment, exposure, data sensitivity, and business context. No black boxes.</p>
+        <code>production +40 · internet_exposed +30</code>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-icon">🔗</div>
+        <h3>Correlate</h3>
+        <p>5 built-in rules detect clusters — same-service multi-findings, CVE reuse, exposure+sensitive combinations across scanners.</p>
+        <code>correlate_as_map(findings)</code>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-icon">🤖</div>
+        <h3>Enrich</h3>
+        <p>LLM analyzes the top findings and returns exploitability context, specific fix, urgency classification, and adjusted priority.</p>
+        <code>urgency: now | today | this-week</code>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-icon">📣</div>
+        <h3>Deliver</h3>
+        <p>Ranked top 5 in the dashboard. Slack cards with owner, score, and remediation step. Scheduled via cron or triggered per CI run.</p>
+        <code>POST /triage/analyze</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SCORING -->
+<section class="section section-dark" id="scoring">
+  <div class="container">
+    <h2 class="section-title">Deterministic scoring model</h2>
+    <p class="section-sub">Every factor is additive, auditable, and customizable. No weights. No ML. Maximum score: <strong>140</strong>.</p>
+    <div class="score-table-wrap">
+      <table class="score-table">
+        <thead>
+          <tr><th>Factor</th><th>Condition</th><th>Points</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Severity</td><td>critical</td><td class="pts pts-red">+30</td></tr>
+          <tr><td>Severity</td><td>high</td><td class="pts pts-orange">+20</td></tr>
+          <tr><td>Severity</td><td>medium</td><td class="pts pts-yellow">+10</td></tr>
+          <tr><td>Severity</td><td>low</td><td class="pts pts-dim">+2</td></tr>
+          <tr><td>Environment</td><td>production</td><td class="pts pts-red">+40</td></tr>
+          <tr><td>Exposure</td><td>internet_exposed = true</td><td class="pts pts-orange">+30</td></tr>
+          <tr><td>Data sensitivity</td><td>sensitive_data = true</td><td class="pts pts-orange">+20</td></tr>
+          <tr><td>Business criticality</td><td>high (context map)</td><td class="pts pts-yellow">+20</td></tr>
+          <tr><td>Business criticality</td><td>medium (context map)</td><td class="pts pts-yellow">+10</td></tr>
+          <tr><td>Public facing</td><td>public_facing = true (not already internet_exposed)</td><td class="pts pts-dim">+15</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section class="section" id="architecture">
+  <div class="container">
+    <h2 class="section-title">Architecture</h2>
+    <div class="arch-grid">
+      <div class="arch-card">
+        <div class="arch-label">API</div>
+        <div class="arch-name">FastAPI :8000</div>
+        <p>Ingest, normalize, triage, LLM orchestration. Stateless — scale horizontally.</p>
+      </div>
+      <div class="arch-card">
+        <div class="arch-label">Worker</div>
+        <div class="arch-name">Python BRPOP</div>
+        <p>Async rule engine scorer. Pulls jobs from Redis, updates scores in Postgres.</p>
+      </div>
+      <div class="arch-card">
+        <div class="arch-label">UI</div>
+        <div class="arch-name">Streamlit :8501</div>
+        <p>Dashboard — ingest form, triage view, LLM analyze, health status.</p>
+      </div>
+      <div class="arch-card">
+        <div class="arch-label">Storage</div>
+        <div class="arch-name">PostgreSQL 16</div>
+        <p>Findings and scan runs. Swap for RDS/Cloud SQL in production.</p>
+      </div>
+      <div class="arch-card">
+        <div class="arch-label">Queue + Cache</div>
+        <div class="arch-name">Redis 7</div>
+        <p>Scoring job queue + LLM response cache (24h TTL, SHA-256 keyed).</p>
+      </div>
+      <div class="arch-card">
+        <div class="arch-label">LLM</div>
+        <div class="arch-name">Pluggable</div>
+        <p>OpenRouter · OpenAI · Anthropic. Switch via env var. No code change.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- INTEGRATE -->
+<section class="section section-dark" id="integrate">
+  <div class="container">
+    <h2 class="section-title">Enterprise integration</h2>
+    <div class="integrate-grid">
+
+      <div class="integrate-block">
+        <h3>1. Push from any scanner</h3>
+        <pre class="code-block">curl -X POST https://trte.your-org.com/webhook/findings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scanner": "trivy",
+    "findings": [{
+      "id": "trivy-CVE-2024-5678",
+      "service": "payment-api",
+      "severity": "CRITICAL",
+      "environment": "prod",
+      "cve": "CVE-2024-5678",
+      "description": "OpenSSL heap buffer overflow"
+    }]
+  }'</pre>
+        <p class="integrate-note">TRTE normalizes <code>CRITICAL→critical</code>, <code>prod→production</code> automatically.</p>
+      </div>
+
+      <div class="integrate-block">
+        <h3>2. GitHub Actions (post-scan)</h3>
+        <pre class="code-block">- name: Push to TRTE
+  run: |
+    python scripts/trivy_to_trte.py results.json | \
+      curl -X POST $TRTE_URL/webhook/findings \
+           -H "Content-Type: application/json" \
+           -d @-</pre>
+        <p class="integrate-note">Works with GitLab CI, Jenkins, CircleCI, Buildkite — any tool that can run curl.</p>
+      </div>
+
+      <div class="integrate-block">
+        <h3>3. Service context map</h3>
+        <pre class="code-block">{
+  "payment-api": {
+    "criticality": "high",
+    "public_facing": true,
+    "owner": "payments-team"
+  },
+  "internal-admin": {
+    "criticality": "low",
+    "public_facing": false,
+    "owner": "platform-eng"
+  }
+}</pre>
+        <p class="integrate-note">Auto-enriches findings at ingest. Generate from Backstage, PagerDuty, or ServiceNow.</p>
+      </div>
+
+      <div class="integrate-block">
+        <h3>4. Scheduled Slack triage</h3>
+        <pre class="code-block"># cron: every morning at 8am
+0 8 * * * curl -X POST \
+  https://trte.your-org.com/triage/analyze
+
+# Kubernetes CronJob also supported</pre>
+        <p class="integrate-note">Posts top 3 risk cards to your <code>#security-triage</code> channel with owner, score, and fix.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- QUICK START -->
+<section class="section" id="quickstart">
+  <div class="container">
+    <h2 class="section-title">Quick start</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Clone &amp; configure</h3>
+          <pre class="code-block">git clone https://github.com/sandeep27choudhary/trte-engine.git
+cd trte-engine
+cp .env.example .env
+# Add your LLM API key to .env</pre>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Start the stack</h3>
+          <pre class="code-block">docker compose up -d
+# postgres · redis · api · worker · ui — all in one command</pre>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Open the dashboard</h3>
+          <pre class="code-block">open http://localhost:8501
+# Ingest findings → Run LLM Analysis → Ship fixes</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="container footer-inner">
+    <span class="nav-logo">TRTE<span class="accent">.</span></span>
+    <span class="footer-copy">MIT License · Built for engineering teams who are tired of security noise.</span>
+    <a href="https://github.com/sandeep27choudhary/trte-engine" target="_blank" rel="noopener" class="btn-ghost">GitHub ↗</a>
+  </div>
+</footer>
+
+</body>
+</html>
