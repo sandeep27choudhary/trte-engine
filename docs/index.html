@@ -17,6 +17,7 @@
   <div class="nav-inner">
     <span class="nav-logo">TRTE<span class="accent">.</span></span>
     <div class="nav-links">
+      <a href="#demo">Live Demo</a>
       <a href="#how-it-works">How it works</a>
       <a href="#scoring">Scoring</a>
       <a href="#integrate">Integrate</a>
@@ -193,6 +194,17 @@
   </div>
 </section>
 
+<!-- LIVE DEMO -->
+<section class="section section-dark" id="demo">
+  <div class="container">
+    <h2 class="section-title">Live demo</h2>
+    <p class="section-sub">No install needed. Click <strong>Run TRTE Triage</strong> to simulate the full pipeline — ingest, score, correlate, and LLM-enrich 8 real-world findings from 5 scanners.</p>
+    <div style="background:#0A0F1E;border:1px solid #1E293B;border-radius:16px;padding:28px 28px 24px;max-width:900px;margin:0 auto;">
+      <div id="demo-root"></div>
+    </div>
+  </div>
+</section>
+
 <!-- INTEGRATE -->
 <section class="section section-dark" id="integrate">
   <div class="container">
@@ -303,5 +315,6 @@ cp .env.example .env
   </div>
 </footer>
 
+<script type="module" src="demo.js"></script>
 </body>
 </html>
