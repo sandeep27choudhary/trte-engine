@@ -74,19 +74,45 @@ def _format_finding(f: dict) -> str:
     )
 
 
+def _make_redis() -> Optional[redis.Redis]:
+    try:
+        r = redis.from_url(REDIS_URL, socket_connect_timeout=2)
+        r.ping()
+        return r
+    except Exception as e:
+        print(f"[llm_wrapper] Redis unavailable — cache disabled: {e}")
+        return None
+
+
 class LLMProvider:
     def __init__(self):
-        self._redis = redis.from_url(REDIS_URL)
+        self._redis = _make_redis()
 
     def _call_llm(self, findings: list[dict]) -> list[dict]:
         raise NotImplementedError
+
+    def _cache_get(self, key: str) -> Optional[str]:
+        if self._redis is None:
+            return None
+        try:
+            return self._redis.get(key)
+        except Exception:
+            return None
+
+    def _cache_set(self, key: str, value: str) -> None:
+        if self._redis is None:
+            return
+        try:
+            self._redis.setex(key, REDIS_LLM_TTL, value)
+        except Exception:
+            pass
 
     def analyze(self, findings: list[dict]) -> dict[str, Optional[dict]]:
         results: dict[str, Optional[dict]] = {}
         uncached: list[dict] = []
 
         for f in findings:
-            cached = self._redis.get(_cache_key(f))
+            cached = self._cache_get(_cache_key(f))
             if cached:
                 results[f["id"]] = json.loads(cached)
             else:
@@ -99,12 +125,12 @@ class LLMProvider:
                 for f in uncached:
                     enrichment = enrichment_by_id.get(f["id"])
                     if enrichment:
-                        self._redis.setex(_cache_key(f), REDIS_LLM_TTL, json.dumps(enrichment))
+                        self._cache_set(_cache_key(f), json.dumps(enrichment))
                         results[f["id"]] = enrichment
                     else:
                         results[f["id"]] = None
             except Exception as e:
-                print(f"LLM call failed: {e}")
+                print(f"[llm_wrapper] LLM call failed: {e}")
                 for f in uncached:
                     results[f["id"]] = None
 
@@ -176,11 +202,16 @@ _PROVIDERS = {
 }
 
 
-def get_llm_provider() -> LLMProvider:
-    name = os.environ.get("LLM_PROVIDER", "openai")
+def get_llm_provider() -> Optional[LLMProvider]:
+    name = os.environ.get("LLM_PROVIDER", "")
+    if not name:
+        return None
     cls = _PROVIDERS.get(name)
     if cls is None:
-        raise ValueError(
-            f"Unknown LLM_PROVIDER '{name}'. Must be one of: {list(_PROVIDERS.keys())}"
-        )
-    return cls()
+        print(f"[llm_wrapper] Unknown LLM_PROVIDER '{name}' — LLM enrichment disabled")
+        return None
+    try:
+        return cls()
+    except KeyError as e:
+        print(f"[llm_wrapper] Missing env var for provider '{name}': {e} — LLM enrichment disabled")
+        return None

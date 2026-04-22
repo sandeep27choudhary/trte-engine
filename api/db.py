@@ -59,7 +59,7 @@ def init_db(retries: int = 10, delay: float = 2.0):
                     )
                 """)
             return
-        except Exception as e:
+        except Exception:
             if attempt == retries - 1:
                 raise
             time.sleep(delay)
@@ -74,9 +74,17 @@ def create_scan_run(scanner: str) -> str:
         return str(cur.fetchone()["id"])
 
 
-def insert_findings(scan_run_id: str, findings: list[dict]):
+def insert_findings(scan_run_id: str, findings: list[dict]) -> int:
+    """Insert findings, deduplicating by id within the batch. Returns inserted count."""
+    seen: set[str] = set()
+    unique = []
+    for f in findings:
+        if f["id"] not in seen:
+            seen.add(f["id"])
+            unique.append(f)
+
     with _cursor() as (conn, cur):
-        for f in findings:
+        for f in unique:
             cur.execute(
                 """
                 INSERT INTO findings
@@ -94,6 +102,7 @@ def insert_findings(scan_run_id: str, findings: list[dict]):
                     json.dumps(f),
                 ),
             )
+    return len(unique)
 
 
 def get_top_findings(

@@ -24,6 +24,9 @@ from slack_notifier import notify_top_risks
 
 _CONTEXT_MAP_PATH = Path(__file__).parent / "context_map.json"
 
+_SEV_PTS = {"critical": 30, "high": 20, "medium": 10, "low": 2}
+_CRIT_PTS = {"high": 20, "medium": 10}
+
 
 def _load_context_map() -> dict:
     try:
@@ -33,14 +36,40 @@ def _load_context_map() -> dict:
 
 
 def _enrich_context(finding: dict, context_map: dict) -> dict:
-    """Merge service context from context_map if the finding has none."""
+    """Merge service context from context_map, using _default fallback if service unknown."""
     if finding.get("context"):
         return finding
-    ctx = context_map.get(finding.get("service", ""))
+    ctx = context_map.get(finding.get("service", "")) or context_map.get("_default")
     if ctx:
         finding = dict(finding)
         finding["context"] = ctx
     return finding
+
+
+def _build_why_ranked(row: dict) -> list[str]:
+    """Return up to 3 bullet points explaining why this finding ranked where it did."""
+    reasons = []
+    sev = row.get("severity", "")
+    if sev in _SEV_PTS:
+        reasons.append(f"{sev.capitalize()} severity (+{_SEV_PTS[sev]} pts)")
+    if row.get("environment") == "production":
+        reasons.append("Production environment (+40 pts)")
+    if row.get("internet_exposed"):
+        reasons.append("Internet exposed (+30 pts)")
+    if row.get("sensitive_data"):
+        reasons.append("Handles sensitive data (+20 pts)")
+    raw_ctx = (row.get("raw") or {}).get("context") or {}
+    crit = raw_ctx.get("criticality")
+    if crit in _CRIT_PTS:
+        reasons.append(f"Business criticality: {crit} (+{_CRIT_PTS[crit]} pts)")
+    return reasons[:3]
+
+
+def _build_combined_risk(corr) -> str | None:
+    """Surface the most significant correlation note as a combined_risk summary."""
+    if not corr or not corr.has_correlation or not corr.notes:
+        return None
+    return corr.notes[0]
 
 
 @asynccontextmanager
@@ -72,12 +101,13 @@ def ingest(request: IngestRequest) -> IngestResponse:
         normalized.append(f)
 
     scan_run_id = create_scan_run(request.scanner)
-    insert_findings(scan_run_id, normalized)
+    inserted = insert_findings(scan_run_id, normalized)
     enqueue_scoring_job(scan_run_id, normalized)
     return IngestResponse(
         scan_run_id=scan_run_id,
-        count=len(normalized),
+        count=len(raw_dicts),
         normalized=len(normalized),
+        deduplicated=len(raw_dicts) - inserted,
     )
 
 
@@ -95,12 +125,13 @@ def webhook_ingest(request: WebhookIngestRequest) -> IngestResponse:
         normalized.append(f)
 
     scan_run_id = create_scan_run(request.scanner)
-    insert_findings(scan_run_id, normalized)
+    inserted = insert_findings(scan_run_id, normalized)
     enqueue_scoring_job(scan_run_id, normalized)
     return IngestResponse(
         scan_run_id=scan_run_id,
-        count=len(normalized),
+        count=len(request.findings),
         normalized=len(normalized),
+        deduplicated=len(request.findings) - inserted,
     )
 
 
@@ -124,6 +155,8 @@ def _scored_finding(rank: int, row: dict, corr=None, enrichment=None) -> ScoredF
         criticality=raw_ctx.get("criticality"),
         owner=raw_ctx.get("owner"),
         detected_at=detected_at,
+        why_ranked=_build_why_ranked(row),
+        combined_risk=_build_combined_risk(corr),
         correlation_notes=corr.notes if corr else [],
         has_correlation=corr.has_correlation if corr else False,
         enrichment=enrichment,
@@ -156,8 +189,15 @@ def analyze(
         return TriageResponse(findings=[])
 
     correlation_map = correlate_as_map(rows)
+
+    # LLM enrichment — fully optional; falls back to rule-based output if unavailable
+    enrichment_map: dict = {}
     provider = get_llm_provider()
-    enrichment_map = provider.analyze(rows)
+    if provider is not None:
+        try:
+            enrichment_map = provider.analyze(rows)
+        except Exception as e:
+            print(f"[analyze] LLM enrichment failed, continuing without it: {e}")
 
     findings = []
     for i, row in enumerate(rows[:5]):
@@ -171,6 +211,9 @@ def analyze(
         )
 
     findings_dicts = [f.model_dump() for f in findings]
-    notify_top_risks(findings_dicts)
+    try:
+        notify_top_risks(findings_dicts)
+    except Exception as e:
+        print(f"[analyze] Slack notification failed (non-fatal): {e}")
 
     return TriageResponse(findings=findings)

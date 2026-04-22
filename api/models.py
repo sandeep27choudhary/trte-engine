@@ -30,6 +30,7 @@ class IngestResponse(BaseModel):
     scan_run_id: str
     count: int
     normalized: int
+    deduplicated: int
 
 
 class Enrichment(BaseModel):
@@ -54,6 +55,8 @@ class ScoredFinding(BaseModel):
     criticality: Optional[str] = None
     owner: Optional[str] = None
     detected_at: Optional[str] = None
+    why_ranked: list[str] = []
+    combined_risk: Optional[str] = None
     correlation_notes: list[str] = []
     has_correlation: bool = False
     enrichment: Optional[Enrichment] = None

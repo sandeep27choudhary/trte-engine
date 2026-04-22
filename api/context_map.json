@@ -1,8 +1,9 @@
 {
-  "payment-api":    { "criticality": "high",   "public_facing": true,  "owner": "payments-team" },
-  "auth-service":   { "criticality": "high",   "public_facing": false, "owner": "platform-team" },
-  "reporting-api":  { "criticality": "medium", "public_facing": true,  "owner": "data-team" },
-  "user-service":   { "criticality": "high",   "public_facing": true,  "owner": "core-team" },
-  "admin-api":      { "criticality": "high",   "public_facing": false, "owner": "platform-team" },
-  "notification-svc":{ "criticality": "low",   "public_facing": false, "owner": "infra-team" }
+  "_default":         { "criticality": "low",    "public_facing": false, "owner": "unknown" },
+  "payment-api":      { "criticality": "high",   "public_facing": true,  "owner": "payments-team" },
+  "auth-service":     { "criticality": "high",   "public_facing": false, "owner": "platform-team" },
+  "reporting-api":    { "criticality": "medium", "public_facing": true,  "owner": "data-team" },
+  "user-service":     { "criticality": "high",   "public_facing": true,  "owner": "core-team" },
+  "admin-api":        { "criticality": "high",   "public_facing": false, "owner": "platform-team" },
+  "notification-svc": { "criticality": "low",    "public_facing": false, "owner": "infra-team" }
 }
