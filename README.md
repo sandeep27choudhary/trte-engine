@@ -463,11 +463,24 @@ Body: { "scanner": string, "findings": [Finding] }
 
 ### Ingest findings (flexible webhook)
 
+Accepts three payload shapes — no strict schema required:
+
 ```
 POST /webhook/findings
-Body: { "scanner": string, "findings": [WebhookFinding] }
-→ { "scan_run_id": uuid, "count": int, "normalized": int }
+
+# Format A — wrapped object (recommended)
+{ "scanner": "trivy", "findings": [{ ...finding... }] }
+
+# Format B — raw list
+[{ ...finding... }, { ...finding... }]
+
+# Format C — single finding dict
+{ "service": "api", "severity": "CRITICAL", "description": "..." }
+
+→ { "scan_run_id": uuid, "count": int, "normalized": int, "deduplicated": int }
 ```
+
+`deduplicated` reports how many findings in the batch had duplicate IDs and were dropped.
 
 ### Get triage list (rule-scored only)
 

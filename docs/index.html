@@ -212,21 +212,22 @@
     <div class="integrate-grid">
 
       <div class="integrate-block">
-        <h3>1. Push from any scanner</h3>
-        <pre class="code-block">curl -X POST https://trte.your-org.com/webhook/findings \
+        <h3>1. Push from any scanner — 3 accepted formats</h3>
+        <pre class="code-block"># Format A: wrapped object (recommended)
+curl -X POST https://trte.your-org.com/webhook/findings \
   -H "Content-Type: application/json" \
-  -d '{
-    "scanner": "trivy",
-    "findings": [{
-      "id": "trivy-CVE-2024-5678",
-      "service": "payment-api",
-      "severity": "CRITICAL",
-      "environment": "prod",
-      "cve": "CVE-2024-5678",
-      "description": "OpenSSL heap buffer overflow"
-    }]
-  }'</pre>
-        <p class="integrate-note">TRTE normalizes <code>CRITICAL→critical</code>, <code>prod→production</code> automatically.</p>
+  -d '{"scanner":"trivy","findings":[{"service":"payment-api","severity":"CRITICAL","environment":"prod","cve":"CVE-2024-5678","description":"OpenSSL RCE"}]}'
+
+# Format B: raw list — no wrapper needed
+curl -X POST https://trte.your-org.com/webhook/findings \
+  -H "Content-Type: application/json" \
+  -d '[{"id":"vuln-1","service":"auth-service","severity":"P0","environment":"live","description":"Auth bypass"}]'
+
+# Format C: single finding dict
+curl -X POST https://trte.your-org.com/webhook/findings \
+  -H "Content-Type: application/json" \
+  -d '{"service":"api","severity":"sev-1","environment":"prod","description":"SQL injection"}'</pre>
+        <p class="integrate-note">Normalizes severity (<code>CRIT/P0/sev-1→critical</code>), environment (<code>prod/live/prd→production</code>), and booleans (<code>"true"/"yes"/1→true</code>) automatically. Duplicate IDs in the same batch are silently deduplicated.</p>
       </div>
 
       <div class="integrate-block">

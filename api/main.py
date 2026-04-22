@@ -3,7 +3,8 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, Query
+from fastapi import Body, FastAPI, Query, Request
+from fastapi.responses import JSONResponse
 
 from correlator import correlate_as_map
 from db import create_scan_run, get_top_findings, init_db, insert_findings
@@ -21,6 +22,7 @@ from models import (
 )
 from normalizer import normalize_finding
 from slack_notifier import notify_top_risks
+from webhook_parser import parse_webhook_body
 
 _CONTEXT_MAP_PATH = Path(__file__).parent / "context_map.json"
 
@@ -114,24 +116,49 @@ def ingest(request: IngestRequest) -> IngestResponse:
 # ── Webhook (flexible scanner format) ────────────────────────────────────────
 
 @app.post("/webhook/findings", status_code=202)
-def webhook_ingest(request: WebhookIngestRequest) -> IngestResponse:
+async def webhook_ingest(request: Request) -> IngestResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Request body must be valid JSON"},
+        )
+
+    try:
+        scanner, raw_findings = parse_webhook_body(body)
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+
     context_map = app.state.context_map
     normalized = []
-    for wf in request.findings:
-        raw = wf.model_dump(exclude_none=False)
-        raw = {k: v for k, v in raw.items() if v is not None or k in ("internet_exposed", "sensitive_data")}
-        f = normalize_finding(raw)
+    for raw in raw_findings:
+        if not isinstance(raw, dict):
+            continue  # skip non-dict items silently
+        try:
+            wf = WebhookFinding(**{k: v for k, v in raw.items() if k in WebhookFinding.model_fields})
+        except Exception:
+            wf = WebhookFinding()
+        cleaned = wf.model_dump(exclude_none=False)
+        cleaned = {k: v for k, v in cleaned.items() if v is not None or k in ("internet_exposed", "sensitive_data")}
+        f = normalize_finding(cleaned)
         f = _enrich_context(f, context_map)
         normalized.append(f)
 
-    scan_run_id = create_scan_run(request.scanner)
+    if not normalized:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "No valid findings could be parsed from the payload"},
+        )
+
+    scan_run_id = create_scan_run(scanner)
     inserted = insert_findings(scan_run_id, normalized)
     enqueue_scoring_job(scan_run_id, normalized)
     return IngestResponse(
         scan_run_id=scan_run_id,
-        count=len(request.findings),
+        count=len(raw_findings),
         normalized=len(normalized),
-        deduplicated=len(request.findings) - inserted,
+        deduplicated=len(raw_findings) - inserted,
     )
 
 
