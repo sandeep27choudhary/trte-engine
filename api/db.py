@@ -36,9 +36,25 @@ def init_db(retries: int = 10, delay: float = 2.0):
                     CREATE TABLE IF NOT EXISTS scan_runs (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         scanner VARCHAR(255),
-                        created_at TIMESTAMPTZ DEFAULT now()
+                        status VARCHAR(50) DEFAULT 'ingested',
+                        findings_count INT DEFAULT 0,
+                        scored_count INT DEFAULT 0,
+                        llm_analyzed BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMPTZ DEFAULT now(),
+                        updated_at TIMESTAMPTZ DEFAULT now()
                     )
                 """)
+                # Migrate existing rows missing the new columns
+                for col, definition in [
+                    ("status",         "VARCHAR(50) DEFAULT 'ingested'"),
+                    ("findings_count", "INT DEFAULT 0"),
+                    ("scored_count",   "INT DEFAULT 0"),
+                    ("llm_analyzed",   "BOOLEAN DEFAULT FALSE"),
+                    ("updated_at",     "TIMESTAMPTZ DEFAULT now()"),
+                ]:
+                    cur.execute(f"""
+                        ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS {col} {definition}
+                    """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS findings (
                         id VARCHAR(255),
@@ -65,14 +81,66 @@ def init_db(retries: int = 10, delay: float = 2.0):
             time.sleep(delay)
 
 
-def create_scan_run(scanner: str) -> str:
+# ── scan_runs ─────────────────────────────────────────────────────────────────
+
+def create_scan_run(scanner: str, findings_count: int = 0) -> str:
     with _cursor() as (conn, cur):
         cur.execute(
-            "INSERT INTO scan_runs (scanner) VALUES (%s) RETURNING id",
-            (scanner,),
+            """
+            INSERT INTO scan_runs (scanner, status, findings_count, updated_at)
+            VALUES (%s, 'ingested', %s, now())
+            RETURNING id
+            """,
+            (scanner, findings_count),
         )
         return str(cur.fetchone()["id"])
 
+
+def update_scan_run_status(scan_run_id: str, status: str, **kwargs):
+    """Update scan_run status and any extra columns passed as kwargs."""
+    allowed = {"scored_count", "llm_analyzed"}
+    sets = ["status = %s", "updated_at = now()"]
+    vals: list = [status]
+    for k, v in kwargs.items():
+        if k in allowed:
+            sets.append(f"{k} = %s")
+            vals.append(v)
+    vals.append(scan_run_id)
+    with _cursor() as (conn, cur):
+        cur.execute(
+            f"UPDATE scan_runs SET {', '.join(sets)} WHERE id = %s",
+            vals,
+        )
+
+
+def get_scan_run(scan_run_id: str) -> dict | None:
+    with _cursor() as (conn, cur):
+        cur.execute(
+            """
+            SELECT id, scanner, status, findings_count, scored_count,
+                   llm_analyzed, created_at, updated_at
+            FROM scan_runs WHERE id = %s
+            """,
+            (scan_run_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_latest_scan_run() -> dict | None:
+    with _cursor() as (conn, cur):
+        cur.execute(
+            """
+            SELECT id, scanner, status, findings_count, scored_count,
+                   llm_analyzed, created_at, updated_at
+            FROM scan_runs ORDER BY created_at DESC LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+# ── findings ──────────────────────────────────────────────────────────────────
 
 def insert_findings(scan_run_id: str, findings: list[dict]) -> int:
     """Insert findings, deduplicating by id within the batch. Returns inserted count."""
@@ -108,10 +176,25 @@ def insert_findings(scan_run_id: str, findings: list[dict]) -> int:
 def get_top_findings(
     days: int | None = None,
     scans: int | None = None,
+    scan_run_id: str | None = None,
     limit: int = 5,
 ) -> list[dict]:
     with _cursor() as (conn, cur):
-        if scans is not None:
+        if scan_run_id is not None:
+            cur.execute(
+                """
+                SELECT f.id, f.service, f.severity, f.type, f.environment,
+                       f.internet_exposed, f.sensitive_data, f.cve,
+                       f.description, f.base_score, f.raw,
+                       f.created_at as detected_at
+                FROM findings f
+                WHERE f.scan_run_id = %s AND f.base_score IS NOT NULL
+                ORDER BY f.base_score DESC, f.created_at DESC
+                LIMIT %s
+                """,
+                (scan_run_id, limit),
+            )
+        elif scans is not None:
             cur.execute(
                 """
                 SELECT f.id, f.service, f.severity, f.type, f.environment,

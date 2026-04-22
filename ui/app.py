@@ -9,6 +9,19 @@ API_URL = os.environ.get("TRTE_API_URL", "http://localhost:8000")
 TIMEOUT = 10
 MAX_SCORE = 140
 
+STATUS_COLOR = {
+    "ingested": "#64748B",
+    "scoring":  "#3B82F6",
+    "scored":   "#EAB308",
+    "analyzed": "#22C55E",
+}
+STATUS_ICON = {
+    "ingested": "○",
+    "scoring":  "◌",
+    "scored":   "◑",
+    "analyzed": "●",
+}
+
 # ── Design tokens (dark / engineer-focused) ───────────────────────────────────
 SEV_COLOR  = {"critical": "#EF4444", "high": "#F97316", "medium": "#EAB308", "low": "#22C55E"}
 SEV_BG     = {"critical": "#450a0a", "high": "#431407", "medium": "#422006", "low": "#052e16"}
@@ -45,6 +58,17 @@ def _pill(text, color="#64748B"):
         f'<span style="color:{color};font-size:11px;font-weight:500;'
         f'font-family:\'Fira Sans\',sans-serif;">{text}</span>'
     )
+
+def _fetch_scan_status(scan_run_id: str | None = None) -> dict | None:
+    url = f"{API_URL}/scan/latest/status" if not scan_run_id else f"{API_URL}/scan/{scan_run_id}/status"
+    try:
+        r = requests.get(url, timeout=TIMEOUT)
+        if r.status_code == 200:
+            return r.json()
+    except requests.exceptions.RequestException:
+        pass
+    return None
+
 
 @st.cache_data(ttl=30)
 def _fetch_triage(days=None, scans=None):
@@ -243,6 +267,88 @@ with s4:
     corr_n = sum(1 for f in filtered if f.get("has_correlation"))
     st.metric("Correlated", corr_n if filtered else "—")
 
+# ── Scan Status ───────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("Latest Scan Status")
+
+_tracked_id = st.session_state.get("last_scan_run_id")
+scan_st = _fetch_scan_status(_tracked_id)
+
+if scan_st:
+    status     = scan_st.get("status", "unknown")
+    s_color    = STATUS_COLOR.get(status, "#64748B")
+    s_icon     = STATUS_ICON.get(status, "○")
+    f_total    = scan_st.get("findings_count", 0)
+    f_scored   = scan_st.get("scored_count", 0)
+    llm_done   = scan_st.get("llm_analyzed", False)
+    updated_at = scan_st.get("updated_at", "")
+    scan_id    = scan_st.get("scan_run_id", "")
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    with sc1:
+        st.markdown(
+            f'<div style="background:#0F172A;border:1px solid {s_color}44;border-radius:8px;padding:12px 16px;">'
+            f'<p style="font-size:10px;font-weight:600;color:#64748B;text-transform:uppercase;'
+            f'letter-spacing:0.1em;margin:0 0 6px;">Status</p>'
+            f'<p style="font-family:\'Fira Code\',monospace;font-size:1.1rem;font-weight:700;'
+            f'color:{s_color};margin:0;">{s_icon}&nbsp;&nbsp;{status.upper()}</p></div>',
+            unsafe_allow_html=True,
+        )
+    with sc2:
+        progress = f_scored / f_total if f_total else 0
+        bar_w = f"{progress * 100:.0f}%"
+        st.markdown(
+            f'<div style="background:#0F172A;border:1px solid #334155;border-radius:8px;padding:12px 16px;">'
+            f'<p style="font-size:10px;font-weight:600;color:#64748B;text-transform:uppercase;'
+            f'letter-spacing:0.1em;margin:0 0 6px;">Scoring Progress</p>'
+            f'<p style="font-family:\'Fira Code\',monospace;font-size:1.1rem;font-weight:700;'
+            f'color:#E2E8F0;margin:0 0 6px;">{f_scored} / {f_total}</p>'
+            f'<div style="background:#1E293B;border-radius:3px;height:4px;">'
+            f'<div style="background:#22C55E;width:{bar_w};height:4px;border-radius:3px;'
+            f'transition:width 0.4s ease;"></div></div></div>',
+            unsafe_allow_html=True,
+        )
+    with sc3:
+        llm_color = "#22C55E" if llm_done else "#475569"
+        llm_label = "✓ Complete" if llm_done else "Not yet run"
+        st.markdown(
+            f'<div style="background:#0F172A;border:1px solid #334155;border-radius:8px;padding:12px 16px;">'
+            f'<p style="font-size:10px;font-weight:600;color:#64748B;text-transform:uppercase;'
+            f'letter-spacing:0.1em;margin:0 0 6px;">LLM Analysis</p>'
+            f'<p style="font-family:\'Fira Code\',monospace;font-size:1.1rem;font-weight:700;'
+            f'color:{llm_color};margin:0;">{llm_label}</p></div>',
+            unsafe_allow_html=True,
+        )
+    with sc4:
+        short_id = scan_id[:8] + "…" if scan_id else "—"
+        upd = _age(updated_at) if updated_at else "—"
+        st.markdown(
+            f'<div style="background:#0F172A;border:1px solid #334155;border-radius:8px;padding:12px 16px;">'
+            f'<p style="font-size:10px;font-weight:600;color:#64748B;text-transform:uppercase;'
+            f'letter-spacing:0.1em;margin:0 0 6px;">Scan Run</p>'
+            f'<p style="font-family:\'Fira Code\',monospace;font-size:0.85rem;font-weight:600;'
+            f'color:#94A3B8;margin:0 0 2px;">{short_id}</p>'
+            f'<p style="font-size:11px;color:#475569;margin:0;">Updated {upd}</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    # Status message
+    if status == "ingested":
+        st.info("Findings ingested — scoring queued. Refresh in a moment to see progress.", icon="⏳")
+    elif status == "scoring":
+        st.info(f"Scoring in progress… {f_scored}/{f_total} findings scored so far.", icon="⚡")
+    elif status == "scored" and not llm_done:
+        st.warning("Scoring complete. Run LLM Analysis below to enrich the top findings.", icon="🤖")
+    elif status == "analyzed":
+        st.success("Analysis complete — all findings scored and LLM-enriched.", icon="✓")
+
+    st_ref_col, _ = st.columns([1, 5])
+    with st_ref_col:
+        if st.button("↻  Refresh Status", use_container_width=True):
+            st.rerun()
+else:
+    st.caption("No scan runs found. Ingest findings below to begin.")
+
 # ── Risk Dashboard ────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("What to fix today")
@@ -331,15 +437,34 @@ else:
                 unsafe_allow_html=True,
             )
 
-            # Score bar
+            # Score bar + why_ranked
+            why = f.get("why_ranked") or []
+            why_html = "".join(
+                f'<span style="color:#94A3B8;font-size:11px;margin-right:14px;">• {r}</span>'
+                for r in why
+            )
             st.markdown(
-                f'<div style="background:#1e293b;border-radius:4px;height:6px;margin-bottom:14px;">'
+                f'<div style="background:#1e293b;border-radius:4px;height:6px;margin-bottom:6px;">'
                 f'<div style="background:{bar_color};width:{score_pct*100:.0f}%;height:6px;border-radius:4px;'
                 f'transition:width 300ms ease;"></div></div>'
-                f'<p style="font-family:\'Fira Code\',monospace;font-size:11px;color:#64748b;margin-top:-10px;margin-bottom:12px;">'
-                f'Risk score {score} / {MAX_SCORE}</p>',
+                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin-bottom:12px;">'
+                f'<span style="font-family:\'Fira Code\',monospace;font-size:11px;color:{bar_color};'
+                f'font-weight:600;margin-right:10px;">{score}/{MAX_SCORE}</span>'
+                f'{why_html}</div>',
                 unsafe_allow_html=True,
             )
+
+            # Top-level combined_risk (deterministic, no LLM needed)
+            top_combined = f.get("combined_risk")
+            if top_combined and not f.get("has_correlation"):
+                st.markdown(
+                    f'<div style="background:#1c1708;border:1px solid #92400e;border-radius:6px;'
+                    f'padding:8px 12px;margin-bottom:10px;">'
+                    f'<p style="color:#F59E0B;font-size:10px;font-weight:600;'
+                    f'text-transform:uppercase;letter-spacing:0.08em;margin:0 0 3px;">Combined Risk</p>'
+                    f'<p style="color:#FCD34D;font-size:12px;margin:0;">{top_combined}</p></div>',
+                    unsafe_allow_html=True,
+                )
 
             # Correlation notes
             if f.get("has_correlation") and f.get("correlation_notes"):
@@ -494,35 +619,46 @@ with st.expander("📥  Ingest Findings"):
         placeholder='[{"id": "vuln-001", "service": "payment-api", "severity": "critical", ...}]',
     )
 
-    sub_col, wh_col = st.columns(2)
-    with sub_col:
-        if st.button("🚀  Submit Findings", use_container_width=True):
-            findings = None
-            try:
-                findings = json.loads(findings_input)
-                if not isinstance(findings, list):
-                    st.error("JSON must be an array of findings.")
-            except json.JSONDecodeError as e:
-                st.error(f"Invalid JSON: {e}")
+    if st.button("🚀  Submit Findings", use_container_width=True):
+        try:
+            payload = json.loads(findings_input)
+        except json.JSONDecodeError as e:
+            st.error(f"Invalid JSON: {e}")
+            payload = None
 
-            if findings is not None:
-                try:
-                    resp = requests.post(
-                        f"{API_URL}/findings",
-                        json={"scanner": scanner, "findings": findings},
-                        timeout=TIMEOUT,
+        if payload is not None:
+            # If user pasted a bare list, wrap it so the scanner name is preserved
+            if isinstance(payload, list):
+                body = {"scanner": scanner, "findings": payload}
+            elif isinstance(payload, dict) and "findings" not in payload:
+                # single finding dict — add scanner
+                body = payload
+                body.setdefault("scanner", scanner)
+            else:
+                # already wrapped { scanner, findings } or { findings } — honour it
+                body = payload
+                body.setdefault("scanner", scanner)
+
+            try:
+                resp = requests.post(
+                    f"{API_URL}/webhook/findings",
+                    json=body,
+                    timeout=TIMEOUT,
+                )
+                if resp.status_code == 202:
+                    data = resp.json()
+                    dedup = data.get("deduplicated", 0)
+                    dedup_str = f" · {dedup} duplicate(s) dropped" if dedup else ""
+                    st.success(
+                        f"✓ Ingested {data['count']} findings "
+                        f"(normalized: {data.get('normalized', data['count'])}{dedup_str}) "
+                        f"· scan_run_id: {data['scan_run_id']}"
                     )
-                    if resp.status_code == 202:
-                        data = resp.json()
-                        st.success(
-                            f"✓ Ingested {data['count']} findings "
-                            f"(normalized: {data.get('normalized', data['count'])}) "
-                            f"· scan_run_id: {data['scan_run_id']}"
-                        )
-                        _fetch_triage.clear()
-                    else:
-                        st.error(f"API error {resp.status_code}: {resp.text}")
-                except Exception as e:
-                    st.error(f"Request failed: {e}")
-    with wh_col:
-        st.caption("Webhook endpoint: `POST /webhook/findings` — accepts any scanner format.")
+                    _fetch_triage.clear()
+                else:
+                    data = resp.json()
+                    st.error(f"API error {resp.status_code}: {data.get('error') or resp.text}")
+            except Exception as e:
+                st.error(f"Request failed: {e}")
+
+    st.caption("Accepts: wrapped object `{scanner, findings:[]}`, raw array `[...]`, or single finding dict. All severity/env aliases normalized automatically.")

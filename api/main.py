@@ -3,11 +3,19 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from correlator import correlate_as_map
-from db import create_scan_run, get_top_findings, init_db, insert_findings
+from db import (
+    create_scan_run,
+    get_latest_scan_run,
+    get_scan_run,
+    get_top_findings,
+    init_db,
+    insert_findings,
+    update_scan_run_status,
+)
 from job_queue import enqueue_scoring_job
 from llm_wrapper import get_llm_provider
 from models import (
@@ -15,6 +23,8 @@ from models import (
     Enrichment,
     IngestRequest,
     IngestResponse,
+    ScanStatusResponse,
+    ScanSummaryResponse,
     ScoredFinding,
     TriageResponse,
     WebhookFinding,
@@ -26,7 +36,7 @@ from webhook_parser import parse_webhook_body
 
 _CONTEXT_MAP_PATH = Path(__file__).parent / "context_map.json"
 
-_SEV_PTS = {"critical": 30, "high": 20, "medium": 10, "low": 2}
+_SEV_PTS  = {"critical": 30, "high": 20, "medium": 10, "low": 2}
 _CRIT_PTS = {"high": 20, "medium": 10}
 
 
@@ -38,7 +48,6 @@ def _load_context_map() -> dict:
 
 
 def _enrich_context(finding: dict, context_map: dict) -> dict:
-    """Merge service context from context_map, using _default fallback if service unknown."""
     if finding.get("context"):
         return finding
     ctx = context_map.get(finding.get("service", "")) or context_map.get("_default")
@@ -49,7 +58,6 @@ def _enrich_context(finding: dict, context_map: dict) -> dict:
 
 
 def _build_why_ranked(row: dict) -> list[str]:
-    """Return up to 3 bullet points explaining why this finding ranked where it did."""
     reasons = []
     sev = row.get("severity", "")
     if sev in _SEV_PTS:
@@ -68,10 +76,15 @@ def _build_why_ranked(row: dict) -> list[str]:
 
 
 def _build_combined_risk(corr) -> str | None:
-    """Surface the most significant correlation note as a combined_risk summary."""
     if not corr or not corr.has_correlation or not corr.notes:
         return None
     return corr.notes[0]
+
+
+def _serialize_dt(val) -> str | None:
+    if val is None:
+        return None
+    return val.isoformat() if hasattr(val, "isoformat") else str(val)
 
 
 @asynccontextmanager
@@ -102,7 +115,7 @@ def ingest(request: IngestRequest) -> IngestResponse:
         f = _enrich_context(f, context_map)
         normalized.append(f)
 
-    scan_run_id = create_scan_run(request.scanner)
+    scan_run_id = create_scan_run(request.scanner, findings_count=len(normalized))
     inserted = insert_findings(scan_run_id, normalized)
     enqueue_scoring_job(scan_run_id, normalized)
     return IngestResponse(
@@ -120,10 +133,7 @@ async def webhook_ingest(request: Request) -> IngestResponse:
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Request body must be valid JSON"},
-        )
+        return JSONResponse(status_code=400, content={"error": "Request body must be valid JSON"})
 
     try:
         scanner, raw_findings = parse_webhook_body(body)
@@ -134,7 +144,7 @@ async def webhook_ingest(request: Request) -> IngestResponse:
     normalized = []
     for raw in raw_findings:
         if not isinstance(raw, dict):
-            continue  # skip non-dict items silently
+            continue
         try:
             wf = WebhookFinding(**{k: v for k, v in raw.items() if k in WebhookFinding.model_fields})
         except Exception:
@@ -146,12 +156,9 @@ async def webhook_ingest(request: Request) -> IngestResponse:
         normalized.append(f)
 
     if not normalized:
-        return JSONResponse(
-            status_code=422,
-            content={"error": "No valid findings could be parsed from the payload"},
-        )
+        return JSONResponse(status_code=422, content={"error": "No valid findings could be parsed from the payload"})
 
-    scan_run_id = create_scan_run(scanner)
+    scan_run_id = create_scan_run(scanner, findings_count=len(normalized))
     inserted = insert_findings(scan_run_id, normalized)
     enqueue_scoring_job(scan_run_id, normalized)
     return IngestResponse(
@@ -166,9 +173,6 @@ async def webhook_ingest(request: Request) -> IngestResponse:
 
 def _scored_finding(rank: int, row: dict, corr=None, enrichment=None) -> ScoredFinding:
     raw_ctx = (row.get("raw") or {}).get("context") or {}
-    detected_at = row.get("detected_at")
-    if detected_at is not None:
-        detected_at = detected_at.isoformat() if hasattr(detected_at, "isoformat") else str(detected_at)
     return ScoredFinding(
         rank=rank,
         id=row["id"],
@@ -181,7 +185,7 @@ def _scored_finding(rank: int, row: dict, corr=None, enrichment=None) -> ScoredF
         sensitive_data=bool(row.get("sensitive_data", False)),
         criticality=raw_ctx.get("criticality"),
         owner=raw_ctx.get("owner"),
-        detected_at=detected_at,
+        detected_at=_serialize_dt(row.get("detected_at")),
         why_ranked=_build_why_ranked(row),
         combined_risk=_build_combined_risk(corr),
         correlation_notes=corr.notes if corr else [],
@@ -217,7 +221,6 @@ def analyze(
 
     correlation_map = correlate_as_map(rows)
 
-    # LLM enrichment — fully optional; falls back to rule-based output if unavailable
     enrichment_map: dict = {}
     provider = get_llm_provider()
     if provider is not None:
@@ -237,6 +240,14 @@ def analyze(
             _scored_finding(i + 1, row, corr=correlation_map.get(row["id"]), enrichment=enrichment)
         )
 
+    # Mark the most recent scan_run as analyzed
+    if request.scans is not None or request.days is not None:
+        pass  # scoped window — don't mark a specific scan_run
+    else:
+        latest = get_latest_scan_run()
+        if latest and latest["status"] == "scored":
+            update_scan_run_status(latest["id"], "analyzed", llm_analyzed=True)
+
     findings_dicts = [f.model_dump() for f in findings]
     try:
         notify_top_risks(findings_dicts)
@@ -244,3 +255,67 @@ def analyze(
         print(f"[analyze] Slack notification failed (non-fatal): {e}")
 
     return TriageResponse(findings=findings)
+
+
+# ── Scan Status ───────────────────────────────────────────────────────────────
+
+@app.get("/scan/latest/status")
+def latest_scan_status() -> ScanStatusResponse:
+    run = get_latest_scan_run()
+    if not run:
+        raise HTTPException(status_code=404, detail="No scan runs found")
+    return ScanStatusResponse(
+        scan_run_id=str(run["id"]),
+        status=run["status"] or "ingested",
+        findings_count=run["findings_count"] or 0,
+        scored_count=run["scored_count"] or 0,
+        llm_analyzed=bool(run["llm_analyzed"]),
+        created_at=_serialize_dt(run.get("created_at")),
+        updated_at=_serialize_dt(run.get("updated_at")),
+    )
+
+
+@app.get("/scan/{scan_run_id}/status")
+def scan_status(scan_run_id: str) -> ScanStatusResponse:
+    run = get_scan_run(scan_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"scan_run {scan_run_id!r} not found")
+    return ScanStatusResponse(
+        scan_run_id=str(run["id"]),
+        status=run["status"] or "ingested",
+        findings_count=run["findings_count"] or 0,
+        scored_count=run["scored_count"] or 0,
+        llm_analyzed=bool(run["llm_analyzed"]),
+        created_at=_serialize_dt(run.get("created_at")),
+        updated_at=_serialize_dt(run.get("updated_at")),
+    )
+
+
+@app.get("/scan/{scan_run_id}/summary")
+def scan_summary(scan_run_id: str) -> ScanSummaryResponse:
+    run = get_scan_run(scan_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"scan_run {scan_run_id!r} not found")
+
+    status = run["status"] or "ingested"
+    scoring_done = status in ("scored", "analyzed")
+    llm_done = bool(run["llm_analyzed"])
+
+    top_risks = []
+    if scoring_done:
+        rows = get_top_findings(scan_run_id=scan_run_id, limit=5)
+        correlation_map = correlate_as_map(rows)
+        top_risks = [
+            _scored_finding(i + 1, row, corr=correlation_map.get(row["id"]))
+            for i, row in enumerate(rows)
+        ]
+
+    return ScanSummaryResponse(
+        scan_run_id=str(run["id"]),
+        status=status,
+        findings_count=run["findings_count"] or 0,
+        scored_count=run["scored_count"] or 0,
+        scoring_done=scoring_done,
+        llm_done=llm_done,
+        top_risks=top_risks,
+    )

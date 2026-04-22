@@ -3,7 +3,7 @@ import os
 
 import redis
 
-from db import update_finding_score
+from db import update_finding_score, update_scan_run_status
 from rule_engine import score
 
 REDIS_URL = os.environ["REDIS_URL"]
@@ -15,12 +15,19 @@ def process_job(job_data: str):
     scan_run_id = job["scan_run_id"]
     findings = job["findings"]
 
+    update_scan_run_status(scan_run_id, "scoring")
+
+    scored = 0
     for finding in findings:
         try:
             base_score = score(finding)
             update_finding_score(scan_run_id, finding["id"], base_score)
+            scored += 1
         except Exception as e:
             print(f"Skipping finding {finding.get('id')}: {e}")
+
+    update_scan_run_status(scan_run_id, "scored", scored_count=scored)
+    print(f"[worker] scan_run={scan_run_id} scored={scored}/{len(findings)}")
 
 
 def main():

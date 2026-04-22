@@ -71,6 +71,26 @@ class AnalyzeRequest(BaseModel):
     scans: Optional[int] = None
 
 
+class ScanStatusResponse(BaseModel):
+    scan_run_id: str
+    status: str
+    findings_count: int
+    scored_count: int
+    llm_analyzed: bool
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ScanSummaryResponse(BaseModel):
+    scan_run_id: str
+    status: str
+    findings_count: int
+    scored_count: int
+    scoring_done: bool
+    llm_done: bool
+    top_risks: list[ScoredFinding] = []
+
+
 # Webhook ingestion — flexible schema for external scanners
 class WebhookFinding(BaseModel):
     id: Optional[str] = None
